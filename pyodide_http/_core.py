@@ -2,13 +2,12 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional, Dict
 from email.parser import Parser
-from pyodide.ffi import to_js
+from pyodide.ffi import to_js, run_sync
 
 from . import _options
 
 # need to import streaming here so that the web-worker is setup
 from ._streaming import send_streaming_request
-
 
 """
 There are some headers that trigger unintended CORS preflight requests.
@@ -74,7 +73,7 @@ def show_streaming_warning():
         )
 
 
-def send(request: Request, stream: bool = False) -> Response:
+def orig_send(request: Request, stream: bool = False, withCredentials: bool | None = None) -> Response:
     if request.params:
         from js import URLSearchParams
 
@@ -125,7 +124,7 @@ def send(request: Request, stream: bool = False) -> Response:
     if hasattr(body, 'read'):
         body = body.read()
 
-    xhr.withCredentials = _options.with_credentials
+    xhr.withCredentials = _options.with_credentials if withCredentials is None else withCredentials
     xhr.send(to_js(body))
 
     headers = dict(Parser().parsestr(xhr.getAllResponseHeaders()))
@@ -136,3 +135,74 @@ def send(request: Request, stream: bool = False) -> Response:
         body = xhr.response.encode("ISO-8859-15")
 
     return Response(status_code=xhr.status, headers=headers, body=body)
+
+
+def dlpro_proxy_send(request: Request, credentials: bool = False):
+    from js import proxy_fetch, Object
+    # pyodide wont convert custom objects by default, so parse them out
+    jsified_request = {
+        "method": request.method,
+        "url": request.url,
+        "params": request.params,
+        "body": request.body,
+        "headers": request.headers,
+        "timeout": request.timeout,
+        "credentials": credentials,
+    }
+    # TODO: im aware sometimes yt-dlp doesnt want the exact cookies the browser has,
+    #  but setting cookies is a hard and janky process
+    # print(current_cookies)
+    # oldcookies = run_sync(force_cookies(to_js(chromeify_cookies(current_cookies), dict_converter=Object.fromEntries)))
+    # block until async js request is done
+    js_response = run_sync(proxy_fetch(to_js(jsified_request, dict_converter=Object.fromEntries)))
+
+    # run_sync(force_cookies(oldcookies))
+    # idfk, ripped from pyodide
+    headers = dict(Parser().parsestr(js_response["headers"]))
+    # expected response object
+    return Response(
+        status_code=js_response["status_code"],
+        headers=headers,
+        body=js_response["body"]
+    )
+
+
+# major patch
+def send(request: Request, stream: bool = False):
+    # print(request)
+    proxy = False
+    credentials = False
+    # these headers cannot be modified directly, but they are needed, so requests are proxied through a content script
+    proxy_headers = ["origin"]
+    # the browser doesnt let you set these
+    blocked_headers = ['sec-fetch-mode', 'accept-encoding', "origin", "referer", "user-agent", "cookie", "cookie2"]
+    # we cant directly set cookie headers, but we can ask the browser to include credentials if yt-dlp wishes to set them
+    credentials_headers = ["cookie", "cookie2"]
+    # handle headers
+    new_headers = {}
+    for header, value in request.headers.items():
+        # dont add headers that are not allowed
+        if header.lower() in blocked_headers:
+            # print("Blocked header:", header, value)
+            # signal we need to proxy this request
+            if header.lower() in proxy_headers:
+                proxy = True
+            # signal we need to include credentials
+            if header.lower() in credentials_headers:
+                credentials = True
+        else:
+            # print("Allowed header:", header, value)
+            new_headers[header] = value
+    request.headers = new_headers
+    # print(request)
+    if proxy:
+        if stream:
+            raise Exception("Attempted to stream through proxy, which isnt supported.")
+        return dlpro_proxy_send(request, credentials)
+    else:
+        # print(current_cookies)
+        # oldcookies = run_sync(force_cookies(chromeify_cookies(to_js(current_cookies, dict_converter=Object.fromEntries))))
+        # print("stream", stream)
+        # try:
+        #     nonlocal out
+        return orig_send(request, stream, credentials)

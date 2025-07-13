@@ -1,3 +1,5 @@
+import ssl
+
 try:
     from js import XMLHttpRequest
 
@@ -75,5 +77,8 @@ def should_patch():
 
 
 def patch_all():
+    # patch, no idea what it does honestly
+    ssl._create_default_https_context = ssl._create_unverified_context
+
     patch_requests(continue_on_import_error=True)
     patch_urllib(continue_on_import_error=True)
