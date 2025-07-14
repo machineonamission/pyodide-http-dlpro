@@ -1,7 +1,9 @@
 import sys
+import traceback
 from io import BytesIO
 
 import urllib.request
+import urllib.error
 from http.client import HTTPResponse
 
 from ._core import Request, send
@@ -9,7 +11,6 @@ from ._core import Request, send
 _IS_PATCHED = False
 
 import io
-
 
 
 class FakeSock:
@@ -135,6 +136,11 @@ def urlopen(url, *args, **kwargs):
         response.url = url.full_url
     else:
         response.url = url
+
+    # urlopen actually throws an exception on http errors. i dont think yt-dlp cares, but this is "proper"
+    # wrote this as i was chasing down a different bug, but i think its more proper so it stays
+    if not (200 <= response.status < 300):
+        raise urllib.error.HTTPError(response.url, response.status, f"HTTP Error {response.status}", response.headers, None)
 
     return response
 
