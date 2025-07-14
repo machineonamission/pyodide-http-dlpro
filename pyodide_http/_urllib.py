@@ -89,9 +89,6 @@ def urlopen(url, *args, **kwargs):
     # compressed format) the 'Content-Length' is the compressed length, while the
     # data itself is uncompressed. This will cause problems while decoding our
     # fake response.
-    headers_without_content_length = {
-        k: v for k, v in resp.headers.items() if k != "content-length"
-    }
 
     """
     Ok so, pyodide_http reconstructs a raw HTTP response from the body that XHR returns. Problem is, XHR handles 
@@ -99,8 +96,9 @@ def urlopen(url, *args, **kwargs):
     to decode nonsense. super simple fix, we just remove the transfer-encoding header, and it behaves like normal
     bytes, and thats fine
     """
-    if "transfer-encoding" in resp.headers:
-        del resp.headers["transfer-encoding"]
+    headers_without_content_length = {
+        k: v for k, v in resp.headers.items() if k.lower() not in ["content-length", "transfer-encoding"]
+    }
 
     if resp.stream:
         response_header = (
