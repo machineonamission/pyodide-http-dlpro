@@ -1,3 +1,4 @@
+import sys
 from io import BytesIO
 
 import urllib.request
@@ -7,6 +8,9 @@ from ._core import Request, send
 
 _IS_PATCHED = False
 
+import io
+
+
 
 class FakeSock:
     def __init__(self, data):
@@ -14,6 +18,53 @@ class FakeSock:
 
     def makefile(self, mode):
         return BytesIO(self.data)
+
+
+class StreamSock:
+    def __init__(self, header, body):
+        self.stream = PrefixedReader(header, body)
+
+    def makefile(self, mode):
+        return self.stream
+
+
+class PrefixedReader(io.RawIOBase):
+    def __init__(self, prefix: bytes, reader: io.BufferedReader):
+        # keep a memoryview so we can slice off bytes without copying on each read
+        self._prefix = memoryview(prefix)
+        self._reader = reader
+
+    def readable(self):
+        return True
+
+    def readinto(self, b: bytearray) -> int:
+        """Fill 'b' first from the prefix, then from the underlying reader."""
+        size = len(b)
+        buf = bytearray()
+
+        # 1) Serve from prefix if any remains
+        if self._prefix is not None:
+            if len(self._prefix) <= size:
+                buf += self._prefix.tobytes()
+                remaining = size - len(self._prefix)
+                self._prefix = None
+                if remaining:
+                    chunk = self._reader.read(remaining)
+                    if chunk:
+                        buf += chunk
+            else:
+                buf += self._prefix[:size].tobytes()
+                self._prefix = self._prefix[size:]
+        else:
+            # 2) No prefix left → drain straight from the reader
+            chunk = self._reader.read(size)
+            if chunk:
+                buf += chunk
+
+        # copy into the supplied buffer and report how many bytes we wrote
+        b_view = memoryview(b)
+        b_view[:len(buf)] = buf
+        return len(buf)
 
 
 def urlopen(url, *args, **kwargs):
@@ -29,6 +80,9 @@ def urlopen(url, *args, **kwargs):
 
     request = Request(method, url, headers=headers, body=data)
     resp = send(request)
+    from js import console
+    from pyodide.ffi import to_js
+    # print(resp)
 
     # Build a fake http response
     # Strip out the content-length header. When Content-Encoding is 'gzip' (or other
@@ -38,16 +92,6 @@ def urlopen(url, *args, **kwargs):
     headers_without_content_length = {
         k: v for k, v in resp.headers.items() if k != "content-length"
     }
-    response_data = (
-            b"HTTP/1.1 "
-            + str(resp.status_code).encode("ascii")
-            + b"\n"
-            + "\n".join(
-        f"{key}: {value}" for key, value in headers_without_content_length.items()
-    ).encode("ascii")
-            + b"\n\n"
-            + resp.body
-    )
 
     """
     Ok so, pyodide_http reconstructs a raw HTTP response from the body that XHR returns. Problem is, XHR handles 
@@ -58,9 +102,35 @@ def urlopen(url, *args, **kwargs):
     if "transfer-encoding" in resp.headers:
         del resp.headers["transfer-encoding"]
 
-    response = HTTPResponse(FakeSock(response_data))
-    response.url = url
-    response.begin()
+    if resp.stream:
+        response_header = (
+                b"HTTP/1.1 "
+                + str(resp.status_code).encode("ascii")
+                + b"\n"
+                + "\n".join(
+            f"{key}: {value}" for key, value in headers_without_content_length.items()
+        ).encode("ascii")
+                + b"\n\n"
+        )
+
+        response = HTTPResponse(StreamSock(response_header, resp.body))
+        response.url = url
+        response.begin()
+    else:
+        response_data = (
+                b"HTTP/1.1 "
+                + str(resp.status_code).encode("ascii")
+                + b"\n"
+                + "\n".join(
+            f"{key}: {value}" for key, value in headers_without_content_length.items()
+        ).encode("ascii")
+                + b"\n\n"
+                + resp.body
+        )
+        # print("PROXY:", response_data.decode())
+        response = HTTPResponse(FakeSock(response_data))
+        response.url = url
+        response.begin()
 
     # patch
     if isinstance(url, urllib.request.Request):
@@ -77,12 +147,15 @@ def urlopen_self_removed(self, url, *args, **kwargs):
 
 current_jar = None
 current_cookies = None
+
+
 # patch: add cookies
 class CookiePatch(urllib.request.HTTPCookieProcessor):
     def __init__(self, cookiejar):
         super().__init__(cookiejar)
         global current_jar
         current_jar = cookiejar
+
 
 def patch():
     global _IS_PATCHED

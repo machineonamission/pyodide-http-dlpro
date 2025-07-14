@@ -8,6 +8,7 @@ from . import _options
 
 # need to import streaming here so that the web-worker is setup
 from ._streaming import send_streaming_request
+# import ._streaming
 
 """
 There are some headers that trigger unintended CORS preflight requests.
@@ -57,6 +58,7 @@ class Response:
     status_code: int
     headers: Dict[str, str]
     body: bytes
+    stream: bool = False
 
 
 _SHOWN_WARNING = False
@@ -99,7 +101,12 @@ def orig_send(request: Request, stream: bool = False, withCredentials: bool | No
             result = send_streaming_request(request)
             if result == False:
                 stream = False
+                print("FALLING BACK TO NON STREAMING UH OH")
             else:
+                newh = {}
+                for [key, val] in result.headers:
+                    newh[key] = val
+                result.headers = newh
                 return result
 
     xhr = XMLHttpRequest.new()
@@ -205,4 +212,4 @@ def send(request: Request, stream: bool = False):
         # print("stream", stream)
         # try:
         #     nonlocal out
-        return orig_send(request, stream, credentials)
+        return orig_send(request, True, credentials)

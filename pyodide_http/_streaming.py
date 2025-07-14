@@ -1,28 +1,30 @@
 """
-Support for streaming http requests. 
+Support for streaming http requests.
 
-A couple of caveats - 
+A couple of caveats -
 
 Firstly, you can't do streaming http in the main UI thread, because atomics.wait isn't allowed. This only
 works if you're running pyodide in a web worker.
 
 Secondly, this uses an extra web worker and SharedArrayBuffer to do the asynchronous fetch
-operation, so it requires that you have crossOriginIsolation enabled, by serving over https 
+operation, so it requires that you have crossOriginIsolation enabled, by serving over https
 (or from localhost) with the two headers below set:
 
     Cross-Origin-Opener-Policy: same-origin
     Cross-Origin-Embedder-Policy: require-corp
 
-You can tell if cross origin isolation is successfully enabled by looking at the global crossOriginIsolated variable in 
+You can tell if cross origin isolation is successfully enabled by looking at the global crossOriginIsolated variable in
 javascript console. If it isn't, requests with stream set to True will fallback to XMLHttpRequest, i.e. getting the whole
 request into a buffer and then returning it. it shows a warning in the javascript console in this case.
 """
-
-
+import asyncio
 import io
 import json
+import time
+import traceback
+
 import js
-from js import crossOriginIsolated
+from js import SharedArrayBuffer
 from pyodide.ffi import to_js
 from urllib.request import Request
 
@@ -32,6 +34,7 @@ ERROR_TIMEOUT = -3
 ERROR_EXCEPTION = -4
 
 _STREAMING_WORKER_CODE = """
+// console.log("HELLO FROM STREAMING WORKER");
 let SUCCESS_HEADER = -1
 let SUCCESS_EOF = -2
 let ERROR_TIMEOUT = -3
@@ -197,12 +200,19 @@ class _ReadStream(io.RawIOBase):
 
 class _StreamingFetcher:
     def __init__(self):
-        # make web-worker and data buffer on startup
-        dataBlob = js.Blob.new(
-            [_STREAMING_WORKER_CODE], _obj_from_dict({"type": "application/javascript"})
-        )
-        dataURL = js.URL.createObjectURL(dataBlob)
-        self._worker = js.Worker.new(dataURL)
+        # print ("STREAMER INIT")
+        # # make web-worker and data buffer on startup
+        # dataBlob = js.Blob.new(
+        #     [_STREAMING_WORKER_CODE], _obj_from_dict({"type": "application/javascript"})
+        # )
+        # dataURL = js.URL.createObjectURL(dataBlob)
+        # print(dataURL)
+        # self._worker = js.Worker.new(dataURL)
+        from pyodide.ffi import run_sync
+        self._worker = run_sync(js.spawn_worker())
+        # print("STREAMER WORKER CREATED")
+        # asyncio.run(asyncio.sleep(3))
+        # js.console.log(self._worker)
 
     def send(self, request):
         from ._core import Response
@@ -219,15 +229,15 @@ class _StreamingFetcher:
         js.Atomics.store(int_buffer, 0, 0)
         js.Atomics.notify(int_buffer, 0)
         absolute_url = js.URL.new(request.url, js.location).href
-        js.console.log(
-            _obj_from_dict(
-                {
-                    "buffer": shared_buffer,
-                    "url": absolute_url,
-                    "fetchParams": fetch_data,
-                }
-            )
-        )
+        # js.console.log(
+        #     _obj_from_dict(
+        #         {
+        #             "buffer": shared_buffer,
+        #             "url": absolute_url,
+        #             "fetchParams": fetch_data,
+        #         }
+        #     )
+        # )
         self._worker.postMessage(
             _obj_from_dict(
                 {
@@ -235,8 +245,10 @@ class _StreamingFetcher:
                     "url": absolute_url,
                     "fetchParams": fetch_data,
                 }
-            )
+            ),
         )
+
+        # print(self._worker)
         # wait for the worker to send something
         js.Atomics.wait(int_buffer, 0, 0, timeout)
         if int_buffer[0] == 0:
@@ -271,6 +283,7 @@ class _StreamingFetcher:
                     ),
                     buffer_size=1048576,
                 ),
+                stream=True
             )
         if int_buffer[0] == ERROR_EXCEPTION:
             string_len = int_buffer[1]
@@ -283,18 +296,14 @@ class _StreamingFetcher:
                 f"Exception thrown in fetch: {json_str}", request=request, response=None
             )
 
-
-if crossOriginIsolated:
+if SharedArrayBuffer:
     _fetcher = _StreamingFetcher()
 else:
     _fetcher = None
 
 
 def send_streaming_request(request: Request):
-    if _fetcher:
-        return _fetcher.send(request)
-    else:
-        from ._core import show_streaming_warning
-
-        show_streaming_warning()
-        return False
+    # global _fetcher
+    # if _fetcher is None:
+    #     _fetcher = _StreamingFetcher()
+    return _fetcher.send(request)
