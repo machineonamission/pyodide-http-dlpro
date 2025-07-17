@@ -98,19 +98,10 @@ class _ReadStream(io.RawIOBase):
 
 class _StreamingFetcher:
     def __init__(self):
-        # print ("STREAMER INIT")
-        # # make web-worker and data buffer on startup
-        # dataBlob = js.Blob.new(
-        #     [_STREAMING_WORKER_CODE], _obj_from_dict({"type": "application/javascript"})
-        # )
-        # dataURL = js.URL.createObjectURL(dataBlob)
-        # print(dataURL)
-        # self._worker = js.Worker.new(dataURL)
+        # modified from pyodide_http's own code, its safer to spawn in js.
+        # i think lifetimes get fucked up if its spawned in python
         from pyodide.ffi import run_sync
         self._worker = run_sync(js.spawn_worker())
-        # print("STREAMER WORKER CREATED")
-        # asyncio.run(asyncio.sleep(3))
-        # js.console.log(self._worker)
 
     def send(self, request, credentials: bool):
         from ._core import Response
@@ -118,6 +109,7 @@ class _StreamingFetcher:
         headers = request.headers
         body = request.body
         fetch_data = {"headers": headers, "body": to_js(body), "method": request.method,
+                      # send credentials if desired
                       "credentials": "include" if credentials else "omit"}
         # start the request off in the worker
         timeout = int(1000 * request.timeout) if request.timeout > 0 else None

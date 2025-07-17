@@ -181,12 +181,12 @@ def send(request: Request, stream: bool = False):
     # print(request)
     proxy = False
     credentials = False
-    # these headers cannot be modified directly, but they are needed, so requests are proxied through a content script
-    proxy_headers = ["origin"]
     # the browser doesnt let you set these
     blocked_headers = ['sec-fetch-mode', 'accept-encoding', "origin", "referer", "user-agent", "cookie", "cookie2"]
     # we cant directly set cookie headers, but we can ask the browser to include credentials if yt-dlp wishes to set them
     credentials_headers = ["cookie", "cookie2"]
+    # these headers cannot be modified directly, but they are needed, so requests are proxied through a content script
+    proxy_headers = ["origin"]
     # handle headers
     new_headers = {}
     for header, value in request.headers.items():

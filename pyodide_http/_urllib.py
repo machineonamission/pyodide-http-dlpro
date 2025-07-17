@@ -21,6 +21,7 @@ class FakeSock:
         return BytesIO(self.data)
 
 
+# fake socket that supports streaming
 class StreamSock:
     def __init__(self, header, body):
         self.stream = PrefixedReader(header, body)
@@ -29,6 +30,8 @@ class StreamSock:
         return self.stream
 
 
+# prepends a constant byte string to a dynamic stream and returns a new stream. this is to add the http headers to
+#  streams
 class PrefixedReader(io.RawIOBase):
     def __init__(self, prefix: bytes, reader: io.BufferedReader):
         # keep a memoryview so we can slice off bytes without copying on each read
@@ -39,7 +42,7 @@ class PrefixedReader(io.RawIOBase):
         return True
 
     def readinto(self, b: bytearray) -> int:
-        """Fill 'b' first from the prefix, then from the underlying reader."""
+        # chatgpt wrote this code, idfk
         size = len(b)
         buf = bytearray()
 
@@ -112,6 +115,7 @@ def urlopen(url, *args, **kwargs):
                 + b"\n\n"
         )
 
+        # wrap streaming array in fake socket
         response = HTTPResponse(StreamSock(response_header, resp.body))
         response.url = url
         response.begin()
