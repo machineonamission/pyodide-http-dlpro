@@ -98,7 +98,7 @@ def orig_send(request: Request, stream: bool = False, withCredentials: bool | No
             stream = False
             show_streaming_warning()
         else:
-            result = send_streaming_request(request)
+            result = send_streaming_request(request, withCredentials)
             if result == False:
                 stream = False
                 print("FALLING BACK TO NON STREAMING UH OH")
@@ -176,6 +176,8 @@ def dlpro_proxy_send(request: Request, credentials: bool = False):
 
 # major patch
 def send(request: Request, stream: bool = False):
+    # from js import console, Object
+    # console.log(to_js(request.headers, dict_converter=Object.fromEntries))
     # print(request)
     proxy = False
     credentials = False
